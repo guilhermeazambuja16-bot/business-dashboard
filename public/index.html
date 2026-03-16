@@ -623,6 +623,7 @@
       <button class="tab-btn" :class="activeTab==='tasks' ? 'active' : ''" @click="activeTab='tasks'">✅ Tarefas</button>
       <button class="tab-btn" :class="activeTab==='github' ? 'active' : ''" @click="activeTab='github'">🐙 GitHub</button>
       <button class="tab-btn" :class="activeTab==='analytics' ? 'active' : ''" @click="activeTab='analytics';$nextTick(()=>initCharts())">📈 Analytics</button>
+      <button class="tab-btn" :class="activeTab==='meeting' ? 'active' : ''" @click="activeTab='meeting'">🤝 Reunião</button>
     </div>
 
     <!-- ─── TAB: DASHBOARD ─── -->
@@ -978,6 +979,53 @@
       </div>
     </div>
 
+    <!-- ─── TAB: MEETING ─── -->
+    <div x-show="activeTab==='meeting'" x-transition style="display:flex;flex-direction:column;height:100%;gap:16px;">
+      <!-- Seleção de agentes para a reunião -->
+      <div class="card" style="padding:20px;">
+        <h3 style="margin-bottom:12px;font-size:14px;color:var(--text-secondary);">PARTICIPANTES DA REUNIÃO</h3>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;">
+          <template x-for="agent in agentList" :key="agent.id">
+            <button
+              @click="meetingAgents.includes(agent.id) ? meetingAgents.splice(meetingAgents.indexOf(agent.id),1) : meetingAgents.push(agent.id)"
+              :style="meetingAgents.includes(agent.id) ? 'border-color:#7c3aed;background:rgba(124,58,237,0.15);' : ''"
+              style="padding:8px 14px;border:1px solid rgba(255,255,255,0.1);border-radius:20px;background:transparent;color:var(--text-primary);cursor:pointer;font-size:13px;display:flex;align-items:center;gap:6px;">
+              <span x-text="agent.emoji"></span>
+              <span x-text="agent.name"></span>
+            </button>
+          </template>
+        </div>
+        <div style="margin-top:8px;font-size:12px;color:var(--text-secondary);" x-text="meetingAgents.length + ' agentes selecionados'"></div>
+      </div>
+
+      <!-- Chat da reunião -->
+      <div class="card" style="flex:1;display:flex;flex-direction:column;min-height:400px;padding:20px;">
+        <div id="meeting-messages" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:12px;padding-bottom:8px;">
+          <template x-if="meetingMessages.length === 0">
+            <div style="text-align:center;color:var(--text-secondary);padding:40px;">
+              Selecione agentes e envie uma mensagem para iniciar a reunião 🤝
+            </div>
+          </template>
+          <template x-for="msg in meetingMessages" :key="msg.id">
+            <div :style="msg.role==='user' ? 'align-self:flex-end;max-width:70%' : 'align-self:flex-start;max-width:85%'">
+              <div x-show="msg.role!=='user'" style="font-size:12px;color:var(--text-secondary);margin-bottom:4px;" x-text="(msg.agentEmoji||'🤖') + ' ' + (msg.agentName||'Agente')"></div>
+              <div :style="msg.role==='user' ? 'background:#7c3aed;border-radius:16px 16px 4px 16px;' : 'background:var(--bg-card-hover);border-radius:16px 16px 16px 4px;'" style="padding:10px 14px;font-size:14px;line-height:1.5;" x-text="msg.content"></div>
+              <div style="font-size:11px;color:var(--text-secondary);margin-top:3px;" x-text="new Date(msg.timestamp||Date.now()).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})"></div>
+            </div>
+          </template>
+        </div>
+        <div style="border-top:1px solid var(--border);padding-top:12px;display:flex;gap:8px;margin-top:12px;">
+          <input
+            x-model="meetingInput"
+            @keydown.enter.prevent="sendMeetingMessage()"
+            :placeholder="meetingAgents.length ? 'Mensagem para todos os agentes... (Enter para enviar)' : 'Selecione pelo menos um agente acima'"
+            :disabled="!meetingAgents.length"
+            style="flex:1;background:var(--bg-card-hover);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text-primary);font-size:14px;outline:none;">
+          <button @click="sendMeetingMessage()" :disabled="!meetingAgents.length" style="padding:10px 20px;background:#7c3aed;border:none;border-radius:8px;color:white;cursor:pointer;font-size:14px;">Enviar</button>
+        </div>
+      </div>
+    </div>
+
   </main>
 
   <!-- ══════════════════════════════════════════
@@ -1103,77 +1151,6 @@
      JAVASCRIPT
 ══════════════════════════════════════════ -->
 <script>
-// ── MOCK DATA ──────────────────────────────────────────────
-const MOCK_AGENTS = [
-  { id: 'ceo',       emoji: '🧠', name: 'CEO Agent',        role: 'Estratégia',       status: 'online',   tasksCompleted: 42, uptime: '99.8%', messages: 318, avgTime: '4m 20s', currentTask: 'Analisando métricas Q4', progress: 0 },
-  { id: 'dev',       emoji: '💻', name: 'Dev Agent',         role: 'Desenvolvimento',  status: 'working',  tasksCompleted: 87, uptime: '98.1%', messages: 512, avgTime: '12m 05s', currentTask: 'Refatorando auth module', progress: 65 },
-  { id: 'marketing', emoji: '📢', name: 'Marketing Agent',   role: 'Marketing',        status: 'working',  tasksCompleted: 34, uptime: '97.5%', messages: 204, avgTime: '6m 40s', currentTask: 'Criando campanha email Q1', progress: 30 },
-  { id: 'sales',     emoji: '💰', name: 'Sales Agent',       role: 'Vendas',           status: 'standby',  tasksCompleted: 21, uptime: '99.0%', messages: 145, avgTime: '3m 12s', currentTask: null, progress: 0 },
-  { id: 'support',   emoji: '🎧', name: 'Support Agent',     role: 'Suporte',          status: 'online',   tasksCompleted: 63, uptime: '99.9%', messages: 891, avgTime: '2m 30s', currentTask: 'Triagem de tickets', progress: 0 },
-  { id: 'analytics', emoji: '📊', name: 'Analytics Agent',   role: 'Análise de Dados', status: 'working',  tasksCompleted: 19, uptime: '96.2%', messages: 77, avgTime: '18m 00s', currentTask: 'Gerando relatório semanal', progress: 80 },
-  { id: 'content',   emoji: '✍️', name: 'Content Agent',     role: 'Conteúdo',         status: 'standby',  tasksCompleted: 55, uptime: '98.4%', messages: 362, avgTime: '8m 15s', currentTask: null, progress: 0 },
-  { id: 'seo',       emoji: '🔍', name: 'SEO Agent',         role: 'SEO',              status: 'standby',  tasksCompleted: 28, uptime: '97.0%', messages: 93, avgTime: '10m 45s', currentTask: null, progress: 0 },
-  { id: 'finance',   emoji: '💼', name: 'Finance Agent',     role: 'Finanças',         status: 'online',   tasksCompleted: 14, uptime: '99.5%', messages: 52, avgTime: '5m 00s', currentTask: 'Reconciliação mensal', progress: 0 },
-];
-
-const MOCK_TASKS = [
-  { id: 't1', title: 'Refatorar módulo de autenticação', description: 'Migrar para JWT + Redis para sessões distribuídas', agentId: 'dev', priority: 'urgent', status: 'in-progress', progress: 65, startedAt: Date.now() - 3600000 },
-  { id: 't2', title: 'Criar campanha de email Q1', description: 'Desenvolver sequência de 5 emails para onboarding de novos clientes', agentId: 'marketing', priority: 'high', status: 'in-progress', progress: 30, startedAt: Date.now() - 7200000 },
-  { id: 't3', title: 'Análise de concorrentes', description: 'Mapear top 10 concorrentes e identificar gaps de mercado', agentId: 'analytics', priority: 'medium', status: 'pending' },
-  { id: 't4', title: 'Otimização de SEO para blog', description: 'Auditoria completa e implementação de melhorias on-page', agentId: 'seo', priority: 'medium', status: 'pending' },
-  { id: 't5', title: 'Relatório financeiro Q4', description: 'Consolidar dados e gerar relatório executivo', agentId: 'finance', priority: 'urgent', status: 'done', completedAt: '14:32' },
-  { id: 't6', title: 'Posts LinkedIn — Semana 12', description: 'Criar 5 posts para a semana com foco em product updates', agentId: 'content', priority: 'low', status: 'done', completedAt: '11:05' },
-  { id: 't7', title: 'Pipeline de vendas Q1', description: 'Estruturar funil e metas de conversão para o trimestre', agentId: 'sales', priority: 'high', status: 'pending' },
-  { id: 't8', title: 'Setup de monitoring', description: 'Configurar Prometheus + Grafana para observabilidade', agentId: 'dev', priority: 'medium', status: 'pending' },
-];
-
-const MOCK_ACTIVITIES = [
-  { id: 'a1', time: '14:52', emoji: '💻', agentName: 'Dev Agent', description: 'Commit realizado: fix(auth): corrigir vazamento de token', type: 'código', badgeColor: '#3b82f6' },
-  { id: 'a2', time: '14:48', emoji: '📊', agentName: 'Analytics Agent', description: 'Relatório semanal 80% concluído', type: 'análise', badgeColor: '#a78bfa' },
-  { id: 'a3', time: '14:41', emoji: '📢', agentName: 'Marketing Agent', description: 'Email template criado para segmento "Power Users"', type: 'criação', badgeColor: '#10b981' },
-  { id: 'a4', time: '14:35', emoji: '🎧', agentName: 'Support Agent', description: '12 tickets triados e categorizados', type: 'suporte', badgeColor: '#f59e0b' },
-  { id: 'a5', time: '14:20', emoji: '🧠', agentName: 'CEO Agent', description: 'Análise de métricas Q4 iniciada', type: 'estratégia', badgeColor: '#ef4444' },
-  { id: 'a6', time: '14:10', emoji: '💼', agentName: 'Finance Agent', description: 'Reconciliação mensal concluída com sucesso', type: 'finanças', badgeColor: '#10b981' },
-  { id: 'a7', time: '13:55', emoji: '✍️', agentName: 'Content Agent', description: 'Posts LinkedIn da semana 12 publicados', type: 'conteúdo', badgeColor: '#f59e0b' },
-  { id: 'a8', time: '13:30', emoji: '💻', agentName: 'Dev Agent', description: 'Pull request #47 aberto para revisão', type: 'código', badgeColor: '#3b82f6' },
-];
-
-const MOCK_GITHUB = {
-  stars: 1247, forks: 89, branch: 'main', lastCommit: 'há 3 min',
-  commits: [
-    { hash: 'a3f92c1', message: 'fix(auth): corrigir vazamento de token JWT', author: 'Dev Agent', time: 'há 3 min' },
-    { hash: 'b8d41e7', message: 'feat(dashboard): adicionar métricas em tempo real', author: 'Dev Agent', time: 'há 22 min' },
-    { hash: 'c2109fa', message: 'style(ui): ajustar espaçamentos do kanban', author: 'Dev Agent', time: 'há 1h' },
-    { hash: 'd7e83b2', message: 'docs: atualizar README com setup de dev', author: 'CEO Agent', time: 'há 2h' },
-    { hash: 'e1c56d9', message: 'chore: bump dependências para versão estável', author: 'Dev Agent', time: 'há 3h' },
-    { hash: 'f9a21c4', message: 'fix(api): tratar erro 503 em chamadas externas', author: 'Dev Agent', time: 'há 5h' },
-    { hash: 'g4b78d0', message: 'feat(analytics): gráfico de distribuição de tasks', author: 'Analytics Agent', time: 'há 6h' },
-  ],
-  files: [
-    { name: 'src', type: 'dir' },
-    { name: 'public', type: 'dir' },
-    { name: 'tests', type: 'dir' },
-    { name: 'package.json', type: 'file', size: '2.4 KB' },
-    { name: 'index.js', type: 'file', size: '8.1 KB' },
-    { name: 'README.md', type: 'file', size: '4.7 KB' },
-    { name: '.env.example', type: 'file', size: '0.5 KB' },
-    { name: 'docker-compose.yml', type: 'file', size: '1.2 KB' },
-    { name: 'Dockerfile', type: 'file', size: '0.8 KB' },
-  ]
-};
-
-const AGENT_RESPONSES = {
-  ceo:       ['Analisando os dados estratégicos agora...', 'Baseado nas métricas, recomendo focar em retenção.', 'Vou priorizar essa iniciativa no roadmap Q1.', 'Excelente pergunta. Deixa eu avaliar o impacto.'],
-  dev:       ['Já estou olhando o código. Encontrei o problema.', 'Posso implementar isso em ~2 horas.', 'Vou criar um PR com a solução proposta.', 'Testando em staging agora, aguarde.'],
-  marketing: ['Campanha criada! Estimativa: +15% de conversão.', 'Analisando o público-alvo para segmentar melhor.', 'Copy finalizado. Aguardando aprovação.'],
-  sales:     ['Pipeline atualizado com 12 novos leads.', 'Follow-up agendado com o cliente X para sexta.', 'Taxa de conversão atual: 8.3%. Meta: 12%.'],
-  support:   ['Ticket #1042 resolvido. Cliente satisfeito!', '3 tickets críticos em andamento.', 'Base de conhecimento atualizada com novo artigo.'],
-  analytics: ['Dados processados. Relatório disponível em 5 min.', 'Anomalia detectada no funil de conversão — investigando.', 'Métricas de onboarding melhoraram 22% esta semana.'],
-  content:   ['Artigo criado: "10 tendências de IA para 2025".', 'Posts do LinkedIn agendados para toda a semana.', 'SEO score: 94/100. Excelente!'],
-  seo:       ['Auditoria concluída. 47 problemas encontrados.', 'Palavras-chave de cauda longa identificadas.', 'Backlinks cresceram 18% no último mês.'],
-  finance:   ['Reconciliação concluída. Saldo: R$ 284.750.', 'Projeção de fluxo de caixa para Q1 gerada.', 'Impostos calculados. Guia disponível.'],
-};
-
 // ── ALPINE STORE ──────────────────────────────────────────
 document.addEventListener('alpine:init', () => {
   Alpine.store('dash', {
@@ -1181,7 +1158,6 @@ document.addEventListener('alpine:init', () => {
     agentList: [],
     newTask: { title: '', description: '', agentId: 'ceo', priority: 'medium' },
     createTask() {
-      // delegate to main component
       window._dashApp && window._dashApp.createTask();
     }
   });
@@ -1212,6 +1188,11 @@ function dashboardApp() {
     newTask: { title: '', description: '', agentId: 'ceo', priority: 'medium' },
     _charts: {},
     _taskTimers: {},
+    // Meeting state
+    meetingMode: false,
+    meetingAgents: [],
+    meetingMessages: [],
+    meetingInput: '',
 
     // ── COMPUTED ──
     get currentAgent() {
@@ -1248,44 +1229,13 @@ function dashboardApp() {
     },
 
     // ── INIT ──
-    init() {
+    async init() {
       window._dashApp = this;
+      this.startClock();
 
-      // Load mock data
-      this.agentList = JSON.parse(JSON.stringify(MOCK_AGENTS));
-      this.tasks = JSON.parse(JSON.stringify(MOCK_TASKS));
-      this.activities = JSON.parse(JSON.stringify(MOCK_ACTIVITIES));
-      this.githubData = JSON.parse(JSON.stringify(MOCK_GITHUB));
-      this.metrics = { revenue: '$12,480.00', revenueChange: '+8.4%', sales: 34, salesChange: '+12%' };
-
-      // Sync to store
-      Alpine.store('dash').agentList = this.agentList;
+      // Sync store references
       Alpine.store('dash').newTask = this.newTask;
       Alpine.store('dash').createTask = () => this.createTask();
-
-      // Clock
-      this.updateClock();
-      setInterval(() => this.updateClock(), 1000);
-
-      // Task timers
-      setInterval(() => { this.$nextTick(() => {}); }, 1000);
-
-      // Connect socket (optional)
-      this.connectSocket();
-
-      // Init charts after render
-      this.$nextTick(() => {
-        setTimeout(() => this.initCharts(), 300);
-      });
-
-      // Demo: add notifications
-      this.notifications = [
-        { id: 1, title: 'Dev Agent concluiu PR #47', body: 'Pull request pronto para revisão' },
-        { id: 2, title: 'Analytics: relatório gerado', body: 'Relatório semanal disponível' },
-      ];
-
-      // Demo: simulate live activity
-      setTimeout(() => this.simulateLiveActivity(), 5000);
 
       // Keyboard shortcut
       document.addEventListener('keydown', (e) => {
@@ -1295,31 +1245,168 @@ function dashboardApp() {
           if (el) el.focus();
         }
       });
+
+      // Carregar TUDO do backend
+      await Promise.all([
+        this.fetchAgents(),
+        this.fetchTasks(),
+        this.fetchActivity(),
+        this.fetchGithub(),
+        this.fetchMetrics(),
+      ]);
+
+      this.connectSocket();
+
+      // Init charts after render
+      this.$nextTick(() => {
+        setTimeout(() => this.initCharts(), 300);
+      });
     },
 
     // ── CLOCK ──
+    startClock() {
+      this.updateClock();
+      setInterval(() => this.updateClock(), 1000);
+      // Force task timer refresh
+      setInterval(() => { this.$nextTick(() => {}); }, 1000);
+    },
+
     updateClock() {
       const now = new Date();
       const pad = n => String(n).padStart(2, '0');
       this.clock = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
     },
 
+    // ── FETCH AGENTS ──
+    async fetchAgents() {
+      try {
+        const r = await fetch('/api/agents');
+        const { data } = await r.json();
+        this.agentList = data || [];
+        Alpine.store('dash').agentList = this.agentList;
+      } catch (e) {
+        console.error('[fetchAgents]', e);
+        this.agentList = [];
+      }
+    },
+
+    // ── FETCH TASKS ──
+    async fetchTasks() {
+      try {
+        const r = await fetch('/api/tasks');
+        const { data } = await r.json();
+        this.tasks = data || [];
+      } catch (e) {
+        console.error('[fetchTasks]', e);
+        this.tasks = [];
+      }
+    },
+
+    // ── FETCH ACTIVITY ──
+    async fetchActivity() {
+      try {
+        const r = await fetch('/api/activity');
+        const { data } = await r.json();
+        this.activities = data || [];
+      } catch (e) {
+        console.error('[fetchActivity]', e);
+        this.activities = [];
+      }
+    },
+
+    // ── FETCH METRICS ──
+    async fetchMetrics() {
+      try {
+        const r = await fetch('/api/metrics');
+        const { data } = await r.json();
+        this.metrics = data || {};
+      } catch (e) {
+        console.error('[fetchMetrics]', e);
+        this.metrics = {};
+      }
+    },
+
+    // ── FETCH GITHUB ──
+    async fetchGithub() {
+      try {
+        const [commitsRes, reposRes] = await Promise.all([
+          fetch('/api/github/commits'),
+          fetch('/api/github/repos'),
+        ]);
+        const { data: commits } = await commitsRes.json();
+        const { data: repos } = await reposRes.json();
+        this.githubData = {
+          commits: commits || [],
+          repos: repos || [],
+          stars: 0,
+          forks: 0,
+          branch: 'main',
+          lastCommit: commits?.[0] ? 'agora mesmo' : '--',
+          files: [
+            { name: 'backend', type: 'dir' },
+            { name: 'public', type: 'dir' },
+            { name: 'package.json', type: 'file', size: '2.1 KB' },
+            { name: 'README.md', type: 'file', size: '4.2 KB' },
+            { name: '.gitignore', type: 'file', size: '0.2 KB' },
+            { name: 'deploy.sh', type: 'file', size: '0.4 KB' },
+          ]
+        };
+      } catch (e) {
+        console.error('[fetchGithub]', e);
+        this.githubData = { commits: [], repos: [], stars: 0, forks: 0, branch: 'main', lastCommit: '--', files: [] };
+      }
+    },
+
     // ── SOCKET ──
     connectSocket() {
       try {
-        const socket = io('http://localhost:3000', { timeout: 2000, reconnectionAttempts: 1 });
-        socket.on('connect', () => { console.log('[Socket] Connected to backend'); });
-        socket.on('agent:status', (data) => {
-          const agent = this.agentList.find(a => a.id === data.id);
-          if (agent) Object.assign(agent, data);
+        const socket = io({ transports: ['websocket', 'polling'] });
+
+        socket.on('connect', () => {
+          console.log('[Socket] Conectado ao backend');
+          this.addNotification('Sistema online — WebSocket conectado', 'success');
         });
-        socket.on('metrics:update', (data) => { Object.assign(this.metrics, data); });
-        socket.on('activity:new', (data) => {
-          this.activities.unshift({ ...data, id: 'live-' + Date.now() });
+
+        socket.on('agent:status', (agentsArray) => {
+          const arr = Array.isArray(agentsArray) ? agentsArray : [agentsArray];
+          arr.forEach(updated => {
+            const idx = this.agentList.findIndex(a => a.id === updated.id);
+            if (idx >= 0) {
+              this.agentList[idx] = { ...this.agentList[idx], ...updated };
+            }
+          });
+          Alpine.store('dash').agentList = [...this.agentList];
+        });
+
+        socket.on('metrics:update', (data) => {
+          this.metrics = { ...this.metrics, ...data };
+        });
+
+        socket.on('activity:new', (activity) => {
+          this.activities.unshift(activity);
           if (this.activities.length > 50) this.activities.pop();
         });
-        socket.on('connect_error', () => { /* silent fail, using mock data */ });
-      } catch (e) { /* Socket.io not available or backend down */ }
+
+        socket.on('task:update', (task) => {
+          const idx = this.tasks.findIndex(t => t.id === task.id);
+          if (idx >= 0) this.tasks[idx] = task;
+          else this.tasks.unshift(task);
+        });
+
+        socket.on('chat:response', ({ agentId, message }) => {
+          if (!this.chatMessages[agentId]) this.chatMessages[agentId] = [];
+          this.chatMessages[agentId].push(message);
+          if (agentId === this.selectedAgent) this.scrollChat();
+        });
+
+        socket.on('disconnect', () => {
+          this.addNotification('WebSocket desconectado — reconectando...', 'warning');
+        });
+
+        this._socket = socket;
+      } catch (e) {
+        console.error('[Socket] Erro ao conectar:', e);
+      }
     },
 
     // ── AGENT ACTIONS ──
@@ -1330,12 +1417,18 @@ function dashboardApp() {
       this.$nextTick(() => this.scrollChat());
     },
 
-    activateAgent(id) {
+    async activateAgent(id) {
       const agent = this.agentList.find(a => a.id === id);
-      if (agent) {
+      if (!agent) return;
+      try {
+        if (this._socket) {
+          this._socket.emit('agent:activate', { agentId: id });
+        }
         agent.status = 'online';
-        this.addActivity({ emoji: agent.emoji, agentName: agent.name, description: 'Agente ativado pelo CEO', type: 'sistema', badgeColor: '#10b981' });
-        this.showToast('⚡ Agente ativado', `${agent.emoji} ${agent.name} está online`, 'success');
+        Alpine.store('dash').agentList = [...this.agentList];
+        this.showToast('Agente ativado', `${agent.emoji} ${agent.name} está online`, 'success');
+      } catch (e) {
+        this.showToast('Erro ao ativar agente', '', 'error');
       }
     },
 
@@ -1345,47 +1438,48 @@ function dashboardApp() {
 
     // ── CHAT ──
     async sendMessage() {
-      const text = this.newMessage.trim();
-      if (!text) return;
-
-      if (!this.chatMessages[this.selectedAgent]) this.chatMessages[this.selectedAgent] = [];
-
-      // User message
-      const userMsg = {
-        id: 'msg-' + Date.now(),
-        role: 'user',
-        content: text,
-        time: this.timeNow()
-      };
-      this.chatMessages[this.selectedAgent].push(userMsg);
+      if (!this.newMessage.trim()) return;
+      const content = this.newMessage.trim();
       this.newMessage = '';
 
-      this.$nextTick(() => this.scrollChat());
+      const agentId = this.selectedAgent;
+      if (!this.chatMessages[agentId]) this.chatMessages[agentId] = [];
 
-      // Typing indicator
+      // Adiciona mensagem do usuário imediatamente
+      this.chatMessages[agentId].push({
+        id: Date.now(),
+        role: 'user',
+        content,
+        time: this.timeNow(),
+        timestamp: new Date().toISOString()
+      });
+
       this.isTyping = true;
+      this.scrollChat();
 
-      // Simulate response
-      const delay = 800 + Math.random() * 1200;
-      await new Promise(r => setTimeout(r, delay));
-      this.isTyping = false;
-
-      const responses = AGENT_RESPONSES[this.selectedAgent] || ['Processando...'];
-      const reply = responses[Math.floor(Math.random() * responses.length)];
-
-      const agentMsg = {
-        id: 'msg-' + Date.now() + 1,
-        role: 'agent',
-        content: reply,
-        time: this.timeNow()
-      };
-      this.chatMessages[this.selectedAgent].push(agentMsg);
-
-      // Increment message count
-      const agent = this.agentList.find(a => a.id === this.selectedAgent);
-      if (agent) agent.messages = (agent.messages || 0) + 2;
-
-      this.$nextTick(() => this.scrollChat());
+      try {
+        const r = await fetch(`/api/chat/${agentId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content })
+        });
+        const { data } = await r.json();
+        if (data && data.agentMessage) {
+          const msg = { ...data.agentMessage, time: this.timeNow() };
+          this.chatMessages[agentId].push(msg);
+        }
+      } catch (e) {
+        this.chatMessages[agentId].push({
+          id: Date.now(),
+          role: 'assistant',
+          content: 'Erro de conexão com o agente.',
+          time: this.timeNow(),
+          timestamp: new Date().toISOString()
+        });
+      } finally {
+        this.isTyping = false;
+        this.scrollChat();
+      }
     },
 
     clearChat() {
@@ -1393,40 +1487,95 @@ function dashboardApp() {
     },
 
     scrollChat() {
-      const el = document.getElementById('chat-messages');
-      if (el) el.scrollTop = el.scrollHeight;
+      this.$nextTick(() => {
+        const el = document.getElementById('chat-messages');
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    },
+
+    // ── MEETING ──
+    async sendMeetingMessage() {
+      if (!this.meetingInput.trim() || this.meetingAgents.length === 0) return;
+      const content = this.meetingInput.trim();
+      this.meetingInput = '';
+
+      this.meetingMessages.push({
+        id: Date.now(),
+        role: 'user',
+        content,
+        timestamp: new Date().toISOString()
+      });
+
+      const promises = this.meetingAgents.map(async (agentId) => {
+        const agent = this.agentList.find(a => a.id === agentId);
+        try {
+          const r = await fetch(`/api/chat/${agentId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: `[REUNIÃO] ${content}` })
+          });
+          const { data } = await r.json();
+          return {
+            agentId, agent,
+            message: data.agentMessage,
+            delay: this.meetingAgents.indexOf(agentId) * 600
+          };
+        } catch { return null; }
+      });
+
+      const results = await Promise.all(promises);
+      results.filter(Boolean).forEach(({ agentId, agent, message, delay }) => {
+        setTimeout(() => {
+          this.meetingMessages.push({
+            ...message,
+            agentId,
+            agentName: agent?.name,
+            agentEmoji: agent?.emoji
+          });
+          this.scrollMeeting();
+        }, delay);
+      });
+    },
+
+    scrollMeeting() {
+      this.$nextTick(() => {
+        const el = document.getElementById('meeting-messages');
+        if (el) el.scrollTop = el.scrollHeight;
+      });
     },
 
     // ── TASKS ──
-    createTask() {
-      const t = this.newTask;
+    async createTask() {
+      const t = Alpine.store('dash').newTask;
       if (!t.title.trim()) {
-        this.showToast('⚠️ Campo obrigatório', 'Preencha o título da tarefa', 'warning');
+        this.showToast('Campo obrigatório', 'Preencha o título da tarefa', 'warning');
         return;
       }
-      const task = {
-        id: 'task-' + Date.now(),
-        title: t.title,
-        description: t.description,
-        agentId: t.agentId,
-        priority: t.priority,
-        status: 'pending',
-        createdAt: this.timeNow()
-      };
-      this.tasks.unshift(task);
-      this.newTask = { title: '', description: '', agentId: 'ceo', priority: 'medium' };
-      Alpine.store('dash').taskModal = false;
-      this.taskModal = false;
-      this.showToast('✅ Tarefa criada', task.title, 'success');
-      this.addActivity({ emoji: this.getAgent(task.agentId).emoji, agentName: this.getAgent(task.agentId).name, description: `Nova tarefa: ${task.title}`, type: 'tarefa', badgeColor: '#7c3aed' });
+      try {
+        const r = await fetch('/api/tasks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(t)
+        });
+        const { data } = await r.json();
+        this.tasks.unshift(data);
+        Alpine.store('dash').newTask = { title: '', description: '', agentId: 'ceo', priority: 'medium' };
+        this.newTask = Alpine.store('dash').newTask;
+        Alpine.store('dash').taskModal = false;
+        this.addNotification('Task criada com sucesso!', 'success');
+        this.showToast('Tarefa criada', data.title, 'success');
+      } catch (e) {
+        this.showToast('Erro ao criar task', '', 'error');
+      }
     },
 
     deleteTask(id) {
       this.tasks = this.tasks.filter(t => t.id !== id);
-      this.showToast('🗑 Tarefa removida', '', 'info');
+      this.showToast('Tarefa removida', '', 'info');
     },
 
-    moveTask(task, newStatus) {
+    async moveTask(task, newStatus) {
+      const prevStatus = task.status;
       task.status = newStatus;
       if (newStatus === 'in-progress') {
         task.startedAt = Date.now();
@@ -1435,17 +1584,36 @@ function dashboardApp() {
       if (newStatus === 'done') {
         task.completedAt = this.timeNow();
         task.progress = 100;
-        this.showToast('🎉 Tarefa concluída!', task.title, 'success');
+        this.showToast('Tarefa concluída!', task.title, 'success');
+      }
+      try {
+        await this.updateTaskStatus(task.id, newStatus);
+      } catch (e) {
+        task.status = prevStatus;
+      }
+    },
+
+    async updateTaskStatus(taskId, newStatus) {
+      try {
+        const r = await fetch(`/api/tasks/${taskId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: newStatus, progress: newStatus === 'completed' ? 100 : undefined })
+        });
+        const { data } = await r.json();
+        const idx = this.tasks.findIndex(t => t.id === taskId);
+        if (idx >= 0) this.tasks[idx] = data;
+      } catch (e) {
+        this.showToast('Erro ao atualizar task', '', 'error');
       }
     },
 
     openTaskDetail(task) {
-      // Could open a detail modal — for now select agent
       this.selectAgent(task.agentId);
     },
 
     priorityLabel(p) {
-      return { urgent: '🔴 Urgente', high: '🟠 Alta', medium: '🟡 Média', low: '🟢 Baixa' }[p] || p;
+      return { urgent: 'Urgente', high: 'Alta', medium: 'Média', low: 'Baixa' }[p] || p;
     },
 
     getTaskTimer(task) {
@@ -1465,7 +1633,7 @@ function dashboardApp() {
 
     // ── GITHUB ──
     simulatePush() {
-      this.showToast('📤 Push iniciado...', 'Enviando para origin/main', 'info');
+      this.showToast('Push iniciado...', 'Enviando para origin/main', 'info');
       setTimeout(() => {
         this.githubData.lastCommit = 'agora mesmo';
         const newCommit = {
@@ -1474,10 +1642,10 @@ function dashboardApp() {
           author: 'CEO Agent',
           time: 'agora mesmo'
         };
+        if (!this.githubData.commits) this.githubData.commits = [];
         this.githubData.commits.unshift(newCommit);
         if (this.githubData.commits.length > 10) this.githubData.commits.pop();
-        this.showToast('✅ Push concluído!', 'Código enviado com sucesso', 'success');
-        this.addActivity({ emoji: '🐙', agentName: 'CEO Agent', description: 'Push realizado para origin/main', type: 'git', badgeColor: '#3b82f6' });
+        this.showToast('Push concluído!', 'Código enviado com sucesso', 'success');
       }, 2000);
     },
 
@@ -1503,8 +1671,8 @@ function dashboardApp() {
       const ctx = canvas.getContext('2d');
       const labels = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
       const colors = ['#7c3aed', '#3b82f6', '#10b981', '#f59e0b', '#ef4444'];
-      const agents = ['CEO', 'Dev', 'Marketing', 'Support', 'Analytics'];
-      const datasets = agents.map((name, i) => ({
+      const agentNames = this.agentList.slice(0, 5).map(a => a.name);
+      const datasets = agentNames.map((name, i) => ({
         label: name,
         data: Array.from({ length: 7 }, () => Math.floor(Math.random() * 40) + 5),
         borderColor: colors[i],
@@ -1579,6 +1747,12 @@ function dashboardApp() {
       if (this.activities.length > 50) this.activities.pop();
     },
 
+    // ── NOTIFICATIONS ──
+    addNotification(message, type = 'info') {
+      this.notifications.unshift({ id: Date.now(), title: message, body: '', type });
+      if (this.notifications.length > 10) this.notifications.pop();
+    },
+
     // ── TOASTS ──
     showToast(title, body = '', type = 'info') {
       const container = document.getElementById('toast-container');
@@ -1606,40 +1780,6 @@ function dashboardApp() {
       }, 4000);
     },
 
-    // ── DEMO LIVE ACTIVITY ──
-    simulateLiveActivity() {
-      const liveEvents = [
-        { emoji: '💻', agentName: 'Dev Agent', description: 'Build CI passou com sucesso', type: 'código', badgeColor: '#3b82f6' },
-        { emoji: '📊', agentName: 'Analytics Agent', description: 'Nova métrica de retenção calculada: 78%', type: 'análise', badgeColor: '#a78bfa' },
-        { emoji: '🎧', agentName: 'Support Agent', description: 'Ticket #1089 resolvido em 4 minutos', type: 'suporte', badgeColor: '#f59e0b' },
-        { emoji: '📢', agentName: 'Marketing Agent', description: 'A/B test iniciado: versão B tem CTR +3%', type: 'marketing', badgeColor: '#10b981' },
-        { emoji: '🔍', agentName: 'SEO Agent', description: 'Keyword gap identificado: 42 oportunidades', type: 'pesquisa', badgeColor: '#a78bfa' },
-      ];
-      let idx = 0;
-      const run = () => {
-        const ev = liveEvents[idx % liveEvents.length];
-        this.addActivity(ev);
-        this.notifications.unshift({ id: Date.now(), title: ev.agentName, body: ev.description });
-        if (this.notifications.length > 10) this.notifications.pop();
-        idx++;
-        setTimeout(run, 8000 + Math.random() * 6000);
-      };
-      run();
-
-      // Simulate agent progress updates
-      setInterval(() => {
-        this.agentList.forEach(agent => {
-          if (agent.status === 'working') {
-            agent.progress = Math.min(100, (agent.progress || 0) + Math.random() * 3);
-            if (agent.progress >= 100) {
-              agent.progress = 0;
-              agent.tasksCompleted = (agent.tasksCompleted || 0) + 1;
-            }
-          }
-        });
-      }, 3000);
-    },
-
     // ── HELPERS ──
     timeNow() {
       const now = new Date();
@@ -1648,21 +1788,6 @@ function dashboardApp() {
     },
   };
 }
-</script>
-
-<!-- Sync taskModal between Alpine component and store -->
-<script>
-document.addEventListener('alpine:init', () => {
-  // Allow modal to be triggered from store
-});
-</script>
-
-<!-- Watch for tab changes to re-init charts -->
-<script>
-document.addEventListener('DOMContentLoaded', () => {
-  // Observe tab switches to re-init charts when analytics tab becomes visible
-  const observer = new MutationObserver(() => {});
-});
 </script>
 
 </body>
