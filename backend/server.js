@@ -17,6 +17,8 @@ const {
   getRandomItem,
 } = require('./agents-config');
 
+const { getAIResponse, isAIAvailable } = require('./ai-engine');
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 const PORT = 3000;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
@@ -169,7 +171,7 @@ app.get('/api/chat/:agentId', (req, res) => {
   res.json({ success: true, data: conversations[agentId] || [] });
 });
 
-app.post('/api/chat/:agentId', (req, res) => {
+app.post('/api/chat/:agentId', async (req, res) => {
   const { agentId } = req.params;
   const { content } = req.body;
   if (!agents[agentId]) return res.status(404).json({ success: false, error: 'Agent not found' });
@@ -185,16 +187,35 @@ app.post('/api/chat/:agentId', (req, res) => {
   };
   conversations[agentId].push(userMsg);
 
-  // Simulate slight delay then respond
-  const responseContent = generateAgentResponse(agentId, content);
+  // Sinaliza que o agente está "pensando"
+  agents[agentId].status = 'working';
+  io.emit('agent:status', Object.values(agents));
+
+  let responseContent;
+  try {
+    if (isAIAvailable()) {
+      // Passa histórico anterior (sem a msg atual) + mensagem atual
+      const history = conversations[agentId].slice(0, -1);
+      responseContent = await getAIResponse(agentId, history, content);
+    } else {
+      responseContent = generateAgentResponse(agentId, content);
+    }
+  } catch (err) {
+    console.error(`[AI] Erro ao chamar Claude API para ${agentId}:`, err.message);
+    responseContent = generateAgentResponse(agentId, content);
+  }
+
   const agentMsg = {
     id: `msg_${Date.now()}_a`,
     role: 'assistant',
     content: responseContent,
-    timestamp: new Date(Date.now() + 500).toISOString(),
+    timestamp: new Date().toISOString(),
   };
   conversations[agentId].push(agentMsg);
 
+  // Volta para online após responder
+  agents[agentId].status = 'online';
+  io.emit('agent:status', Object.values(agents));
   io.emit('chat:response', { agentId, message: agentMsg });
   addActivity(`${agents[agentId].name} respondeu no chat`, 'chat', agentId);
 
@@ -322,20 +343,39 @@ io.on('connection', (socket) => {
   socket.emit('metrics:update', computeMetrics());
 
   // chat:message
-  socket.on('chat:message', ({ agentId, content }) => {
+  socket.on('chat:message', async ({ agentId, content }) => {
     if (!agents[agentId] || !content) return;
     if (!conversations[agentId]) conversations[agentId] = [];
 
     const userMsg = { id: `msg_${Date.now()}_u`, role: 'user', content, timestamp: new Date().toISOString() };
     conversations[agentId].push(userMsg);
 
-    setTimeout(() => {
-      const responseContent = generateAgentResponse(agentId, content);
-      const agentMsg = { id: `msg_${Date.now()}_a`, role: 'assistant', content: responseContent, timestamp: new Date().toISOString() };
-      conversations[agentId].push(agentMsg);
-      io.emit('chat:response', { agentId, message: agentMsg });
-      addActivity(`${agents[agentId].name} respondeu no chat`, 'chat', agentId);
-    }, 600 + Math.random() * 800);
+    // Sinaliza "pensando"
+    agents[agentId].status = 'working';
+    io.emit('agent:status', Object.values(agents));
+    io.emit('chat:thinking', { agentId });
+
+    let responseContent;
+    try {
+      if (isAIAvailable()) {
+        const history = conversations[agentId].slice(0, -1);
+        responseContent = await getAIResponse(agentId, history, content);
+      } else {
+        await new Promise((r) => setTimeout(r, 600 + Math.random() * 800));
+        responseContent = generateAgentResponse(agentId, content);
+      }
+    } catch (err) {
+      console.error(`[AI] Erro socket para ${agentId}:`, err.message);
+      responseContent = generateAgentResponse(agentId, content);
+    }
+
+    const agentMsg = { id: `msg_${Date.now()}_a`, role: 'assistant', content: responseContent, timestamp: new Date().toISOString() };
+    conversations[agentId].push(agentMsg);
+
+    agents[agentId].status = 'online';
+    io.emit('agent:status', Object.values(agents));
+    io.emit('chat:response', { agentId, message: agentMsg });
+    addActivity(`${agents[agentId].name} respondeu no chat`, 'chat', agentId);
   });
 
   // task:create
